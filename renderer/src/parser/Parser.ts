@@ -6,6 +6,7 @@ import {
   STAT_BY_MATCH_STR,
   BaseType,
   RUNE_SINGLE_VALUE,
+  ITEM_BY_TRANSLATED,
 } from "@/assets/data";
 import { ModifierType, StatCalculated, sumStatsByModType } from "./modifiers";
 import {
@@ -108,6 +109,39 @@ const parsers: Array<ParserFn | { virtual: VirtualParserFn }> = [
   { virtual: pickCorrectVariant },
   { virtual: calcBasePercentile },
 ];
+
+const UNCUT_SKILL_GEM_DETECTOR = [
+  {
+    lang: "en",
+    firstLine: "Uncut Skill Gem",
+  },
+  {
+    lang: "en",
+    firstLine: "Uncut Spirit Gem",
+  },
+  {
+    lang: "en",
+    firstLine: "Uncut Support Gem",
+  },
+  {
+    lang: "cmn-Hant",
+    firstLine: "技能寶石",
+  },
+  {
+    lang: "cmn-Hant",
+    firstLine: "輔助寶石",
+  },
+  {
+    lang: "cmn-Hant",
+    firstLine: "精魂寶石",
+  },
+];
+
+function isUncutSkillGem(line: string) {
+  return UNCUT_SKILL_GEM_DETECTOR.find(({ firstLine }) =>
+    line.startsWith(firstLine),
+  );
+}
 
 export function parseClipboard(clipboard: string): Result<ParsedItem, string> {
   try {
@@ -215,28 +249,52 @@ function normalizeName(item: ParserState) {
   }
 }
 
+function findByRefOrTranslated(ns: BaseType["namespace"], name: string) {
+  const info = ITEM_BY_REF(ns, name);
+  if (info?.length) {
+    return info;
+  }
+
+  // if can't find, it mybe not in English
+  return ITEM_BY_TRANSLATED(ns, name);
+}
+
 function findInDatabase(item: ParserState) {
   let info: BaseType[] | undefined;
   if (item.category === ItemCategory.DivinationCard) {
-    info = ITEM_BY_REF("DIVINATION_CARD", item.name);
+    info = findByRefOrTranslated("DIVINATION_CARD", item.name);
   } else if (item.category === ItemCategory.CapturedBeast) {
-    info = ITEM_BY_REF("CAPTURED_BEAST", item.baseType ?? item.name);
+    info = findByRefOrTranslated("CAPTURED_BEAST", item.baseType ?? item.name);
   } else if (item.category === ItemCategory.Gem) {
-    info = ITEM_BY_REF("GEM", item.name);
+    info = findByRefOrTranslated("GEM", item.name);
   } else if (item.category === ItemCategory.MetamorphSample) {
-    info = ITEM_BY_REF("ITEM", item.name);
+    info = findByRefOrTranslated("ITEM", item.name);
   } else if (item.category === ItemCategory.Voidstone) {
-    info = ITEM_BY_REF("ITEM", "Charged Compass");
+    info = findByRefOrTranslated("ITEM", "Charged Compass");
   } else if (item.rarity === ItemRarity.Unique && !item.isUnidentified) {
-    info = ITEM_BY_REF("UNIQUE", item.name);
+    info = findByRefOrTranslated("UNIQUE", item.name);
   } else {
-    info = ITEM_BY_REF("ITEM", item.baseType ?? item.name);
+    info = findByRefOrTranslated("ITEM", item.baseType ?? item.name);
   }
   if (!info?.length) {
     return err("item.unknown");
   }
   if (info[0].unique) {
-    info = info.filter((info) => info.unique!.base === item.baseType);
+    let filteredInfo = info.filter(
+      (info) => info.unique!.base === item.baseType,
+    );
+    // if can't find, it mybe not in English
+    if (!filteredInfo?.length && item.baseType) {
+      const baseInfo = ITEM_BY_TRANSLATED("ITEM", item.baseType);
+      if (baseInfo?.length) {
+        filteredInfo = info.filter(
+          (info) => info.unique!.base === baseInfo[0].refName,
+        );
+      }
+    }
+    if (filteredInfo?.length) {
+      info = filteredInfo;
+    }
   }
   item.infoVariants = info;
   // choose 1st variant, correct one will be picked at the end of parsing
@@ -346,7 +404,8 @@ function pickCorrectVariant(item: ParserState) {
 
 function parseNamePlate(section: string[]) {
   let line = section.shift();
-  if (!line?.startsWith(_$.ITEM_CLASS)) {
+  // if it has no Item Class, it maybe a uncut gem
+  if (!line?.startsWith(_$.ITEM_CLASS) && !isUncutSkillGem(section[0])) {
     return err("item.parse_error");
   }
 
